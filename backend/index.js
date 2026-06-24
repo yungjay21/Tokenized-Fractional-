@@ -3,7 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import Redis from 'ioredis';
+import { readFileSync, writeFileSync, existsSync, accessSync, constants } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -78,8 +79,53 @@ const writeLimiter = rateLimit({
   message: { error: 'Too many write requests, please try again later' },
 });
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// ── Health check helpers ──────────────────────────────────────────────────────
+async function checkRedis() {
+  if (!process.env.REDIS_URL) return { status: 'not_configured' };
+  const client = new Redis(process.env.REDIS_URL, {
+    lazyConnect: true,
+    maxRetriesPerRequest: 0,
+    enableOfflineQueue: false,
+    connectTimeout: 2000,
+  });
+  client.on('error', () => {});
+  try {
+    await client.connect();
+    await client.ping();
+    return { status: 'ok' };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  } finally {
+    client.disconnect();
+  }
+}
+
+function checkStorage() {
+  const file = getDataFile();
+  try {
+    // Check the directory is readable/writable (file may not exist yet)
+    const dir = dirname(file);
+    accessSync(dir, constants.R_OK | constants.W_OK);
+    return { status: 'ok', path: file };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
+}
+
+app.get('/health', async (_req, res) => {
+  const [storage, redis] = await Promise.all([
+    Promise.resolve(checkStorage()),
+    checkRedis(),
+  ]);
+
+  const allOk = storage.status === 'ok' &&
+    (redis.status === 'ok' || redis.status === 'not_configured');
+
+  res.status(allOk ? 200 : 503).json({
+    status: allOk ? 'ok' : 'degraded',
+    timestamp: new Date().toISOString(),
+    dependencies: { storage, redis },
+  });
 });
 
 app.get('/api/rwa', (_req, res) => {

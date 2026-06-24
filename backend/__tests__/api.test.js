@@ -23,11 +23,22 @@ afterAll(() => {
 
 // ── Health check ──────────────────────────────────────────────────────────────
 describe('GET /health', () => {
-  test('returns ok', async () => {
+  test('returns ok with dependency statuses (no Redis configured)', async () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
     expect(res.body.timestamp).toBeDefined();
+    expect(res.body.dependencies.storage.status).toBe('ok');
+    expect(res.body.dependencies.redis.status).toBe('not_configured');
+  });
+
+  test('returns 503 degraded when Redis is configured but unreachable', async () => {
+    process.env.REDIS_URL = 'redis://127.0.0.1:19999'; // nothing listening here
+    const res = await request(app).get('/health');
+    delete process.env.REDIS_URL;
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('degraded');
+    expect(res.body.dependencies.redis.status).toBe('error');
   });
 });
 
