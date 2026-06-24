@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { cacheGet, cacheSet, cacheDel } from './cache.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -13,7 +14,9 @@ const CORS_ORIGINS = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
   : ['http://localhost:5173', 'http://localhost:4173'];
 
-// Read at request time so tests can set env vars before the first request
+const CACHE_KEY_ALL = 'rwa:all';
+const cacheKey = (id) => `rwa:${id}`;
+
 function getDataFile() {
   return join(__dirname, process.env.DATA_FILE || 'data.json');
 }
@@ -33,16 +36,14 @@ function saveData(data) {
   writeFileSync(getDataFile(), JSON.stringify(data, null, 2), 'utf-8');
 }
 
-function validateContractId(id) {
+export function validateContractId(id) {
   return typeof id === 'string' && id.length >= 50 && id.startsWith('C');
 }
 
-function validateRwaBody(body) {
+export function validateRwaBody(body) {
   const required = ['title', 'location', 'description', 'assetType'];
   const missing = required.filter(f => !body[f]);
-  if (missing.length > 0) {
-    return `Missing required fields: ${missing.join(', ')}`;
-  }
+  if (missing.length > 0) return `Missing required fields: ${missing.join(', ')}`;
   return null;
 }
 
@@ -78,32 +79,37 @@ const writeLimiter = rateLimit({
   message: { error: 'Too many write requests, please try again later' },
 });
 
+// ── Routes ────────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/rwa', (_req, res) => {
+app.get('/api/rwa', async (_req, res) => {
+  const cached = await cacheGet(CACHE_KEY_ALL);
+  if (cached) return res.json(cached);
+
   const data = loadData();
-  const assets = Object.entries(data).map(([contractId, meta]) => ({
-    contractId,
-    ...meta,
-  }));
+  const assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
+  await cacheSet(CACHE_KEY_ALL, assets);
   res.json(assets);
 });
 
-app.get('/api/rwa/:contractId', (req, res) => {
+app.get('/api/rwa/:contractId', async (req, res) => {
   const { contractId } = req.params;
+
+  const cached = await cacheGet(cacheKey(contractId));
+  if (cached) return res.json(cached);
+
   const data = loadData();
   const asset = data[contractId];
+  if (!asset) return res.status(404).json({ error: 'Asset metadata not found' });
 
-  if (!asset) {
-    return res.status(404).json({ error: 'Asset metadata not found' });
-  }
-
-  res.json({ contractId, ...asset });
+  const result = { contractId, ...asset };
+  await cacheSet(cacheKey(contractId), result);
+  res.json(result);
 });
 
-app.post('/api/rwa', adminAuth, writeLimiter, (req, res) => {
+app.post('/api/rwa', adminAuth, writeLimiter, async (req, res) => {
   const { contractId, ...metadata } = req.body;
 
   if (!contractId || !validateContractId(contractId)) {
@@ -111,9 +117,7 @@ app.post('/api/rwa', adminAuth, writeLimiter, (req, res) => {
   }
 
   const validationError = validateRwaBody(metadata);
-  if (validationError) {
-    return res.status(400).json({ error: validationError });
-  }
+  if (validationError) return res.status(400).json({ error: validationError });
 
   const data = loadData();
   data[contractId] = {
@@ -130,19 +134,21 @@ app.post('/api/rwa', adminAuth, writeLimiter, (req, res) => {
   };
   saveData(data);
 
+  // Invalidate list cache + this asset's individual cache
+  await cacheDel(CACHE_KEY_ALL, cacheKey(contractId));
+
   res.status(201).json({ contractId, ...data[contractId] });
 });
 
-app.delete('/api/rwa/:contractId', adminAuth, writeLimiter, (req, res) => {
+app.delete('/api/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => {
   const { contractId } = req.params;
   const data = loadData();
-
-  if (!data[contractId]) {
-    return res.status(404).json({ error: 'Asset metadata not found' });
-  }
+  if (!data[contractId]) return res.status(404).json({ error: 'Asset metadata not found' });
 
   delete data[contractId];
   saveData(data);
+
+  await cacheDel(CACHE_KEY_ALL, cacheKey(contractId));
 
   res.json({ message: 'Asset metadata deleted', contractId });
 });
@@ -156,9 +162,10 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-export { app, validateContractId, validateRwaBody };
+export { app };
 
 if (process.env.NODE_ENV !== 'test') {
+  import('./cache.js').then(({ initClient }) => initClient());
   app.listen(PORT, () => {
     console.log(`RWA Off-chain Metadata Backend running at http://localhost:${PORT}`);
   });

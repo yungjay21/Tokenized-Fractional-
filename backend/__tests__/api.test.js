@@ -6,6 +6,11 @@ process.env.DATA_FILE = 'test-data.json';
 import request from 'supertest';
 import { unlinkSync, existsSync } from 'fs';
 import { app } from '../index.js';
+import { setClient } from '../cache.js';
+
+// Ensure Redis is disabled (null = graceful fallback) for these tests
+beforeAll(() => setClient(null));
+afterAll(() => setClient(null));
 
 const API_KEY = 'test-key-for-jest';
 const VALID_ID = 'C' + 'A'.repeat(55);
