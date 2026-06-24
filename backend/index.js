@@ -19,9 +19,7 @@ const CORS_ORIGINS = process.env.CORS_ORIGINS
 const isDev = process.env.NODE_ENV === 'development';
 export const logger = pino({
   level: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'test' ? 'silent' : 'info'),
-  ...(isDev && {
-    transport: { target: 'pino-pretty', options: { colorize: true, ignore: 'pid,hostname' } },
-  }),
+  ...(isDev && { transport: { target: 'pino-pretty', options: { colorize: true, ignore: 'pid,hostname' } } }),
 });
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
@@ -73,7 +71,7 @@ app.use(helmet());
 app.use(cors({ origin: CORS_ORIGINS, methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Content-Type', 'x-api-key'] }));
 app.use(express.json({ limit: '10kb' }));
 
-// Request logging — attaches req.log with requestId, timestamp, level per request
+// Request logging middleware (silent in test)
 app.use(pinoHttp({
   logger,
   autoLogging: { ignore: req => req.url === '/health' },
@@ -101,10 +99,39 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/rwa', (_req, res) => {
+// GET /api/rwa?page=1&limit=20&assetType=real_estate&search=coffee
+app.get('/api/rwa', (req, res) => {
   const data = loadData();
-  const assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
-  res.json(assets);
+  let assets = Object.entries(data).map(([contractId, meta]) => ({ contractId, ...meta }));
+
+  // Filter: assetType (case-insensitive)
+  const { assetType, search, page, limit } = req.query;
+  if (assetType) {
+    const lower = assetType.toLowerCase();
+    assets = assets.filter(a => a.assetType?.toLowerCase() === lower);
+  }
+
+  // Filter: text search on title and description
+  if (search) {
+    const lower = search.toLowerCase();
+    assets = assets.filter(a =>
+      a.title?.toLowerCase().includes(lower) ||
+      a.description?.toLowerCase().includes(lower)
+    );
+  }
+
+  const total = assets.length;
+  const pageNum = Math.max(1, parseInt(page) || 1);
+  const pageSize = Math.min(100, Math.max(1, parseInt(limit) || 20));
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const offset = (pageNum - 1) * pageSize;
+
+  assets = assets.slice(offset, offset + pageSize);
+
+  res.json({
+    data: assets,
+    pagination: { total, page: pageNum, limit: pageSize, totalPages },
+  });
 });
 
 app.get('/api/rwa/:contractId', (req, res) => {
