@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { isAllowed, setAllowed, getUserInfo, signTransaction } from '@stellar/freighter-api';
+import React, { useState, useEffect } from 'react';
+import { signTransaction } from '@stellar/freighter-api';
 import { rpc, TransactionBuilder, Networks, Contract, nativeToScVal } from '@stellar/stellar-sdk';
 
 import Button from './components/Button/Button';
@@ -11,6 +11,9 @@ import Skeleton from './components/Skeleton/Skeleton';
 import Spinner from './components/Spinner/Spinner';
 import styles from './App.module.css';
 
+import { useWalletStore } from './store/useWalletStore';
+import { useAssetStore } from './store/useAssetStore';
+
 const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID || 'C...';
 const RPC_URL = import.meta.env.VITE_RPC_URL || 'https://soroban-testnet.stellar.org:443';
 const NETWORK_PASSPHRASE = import.meta.env.VITE_NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -19,8 +22,23 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const server = new rpc.Server(RPC_URL);
 
 function App() {
-  const [publicKey, setPublicKey] = useState(null);
-  const [shares, setShares] = useState(0);
+  // ── Global store state ─────────────────────────────────────────────────────
+  const {
+    publicKey,
+    isConnecting,
+    walletError,
+    shares,
+    connect,
+    disconnect,
+    checkConnection,
+    setShares,
+    setWalletError,
+    clearWalletError,
+  } = useWalletStore();
+
+  const { assetMeta, fetchMetadata, clearMeta } = useAssetStore();
+
+  // ── Local UI state (not global — scoped to this component) ────────────────
   const [buyAmount, setBuyAmount] = useState(1);
 
   // Granular loading states
@@ -35,6 +53,7 @@ function App() {
     return localStorage.getItem('theme') || 'dark';
   });
 
+  // ── Theme ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('theme', theme);
@@ -44,47 +63,34 @@ function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  const checkFreighter = useCallback(async () => {
-    try {
-      if (await isAllowed()) {
-        const user = await getUserInfo();
-        if (user?.publicKey) {
-          setPublicKey(user.publicKey);
-          return user.publicKey;
-        }
-      }
-    } catch (err) {
-      console.error('Freighter check failed:', err);
-    }
-    return null;
-  }, []);
-
+  // ── On mount: re-validate Freighter session ────────────────────────────────
+  // The persisted publicKey lets the UI render instantly; checkConnection()
+  // then confirms the Freighter session is still live in the background.
   useEffect(() => {
-    checkFreighter();
-  }, [checkFreighter]);
+    checkConnection();
+  }, [checkConnection]);
 
+  // ── Fetch chain data whenever wallet connects ──────────────────────────────
   useEffect(() => {
     if (publicKey) {
       fetchShares();
-      fetchMetadata();
+      fetchMetadata(CONTRACT_ID, API_URL);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publicKey]);
 
+  // ── Wallet actions ─────────────────────────────────────────────────────────
   const connectWallet = async () => {
-    try {
-      setError(null);
-      await setAllowed();
-      await checkFreighter();
-    } catch (err) {
-      setError('Failed to connect Freighter wallet. Ensure the extension is installed and unlocked.');
-    }
+    clearWalletError();
+    setTxError(null);
+    await connect();
   };
 
   const disconnectWallet = () => {
-    setPublicKey(null);
-    setShares(0);
-    setAssetMeta(null);
+    disconnect();
+    clearMeta();
     setTxResult(null);
+    setTxError(null);
   };
 
   const fetchMetadata = async () => {
@@ -107,7 +113,7 @@ function App() {
     if (!publicKey || CONTRACT_ID.length < 50) return;
     setLoadingShares(true);
     try {
-      setError(null);
+      setWalletError(null);
       const contract = new Contract(CONTRACT_ID);
       const scValAddress = nativeToScVal(publicKey, { type: 'address' });
 
@@ -133,10 +139,11 @@ function App() {
     }
   };
 
+  // ── Transactions ───────────────────────────────────────────────────────────
   const handleBuyShares = async () => {
     if (!publicKey) return;
     if (buyAmount < 1) {
-      setError('Must buy at least 1 share');
+      setTxError('Must buy at least 1 share');
       return;
     }
 
@@ -181,11 +188,11 @@ function App() {
     } catch (err) {
       console.error('Error buying shares:', err);
       if (err.message?.includes('paused')) {
-        setError('Marketplace is currently paused. Try again later.');
+        setTxError('Marketplace is currently paused. Try again later.');
       } else if (err.message?.includes('Not enough shares')) {
-        setError('Not enough shares available.');
+        setTxError('Not enough shares available.');
       } else {
-        setError('Transaction failed. Check your token balance and try again.');
+        setTxError('Transaction failed. Check your token balance and try again.');
       }
     } finally {
       setLoadingBuy(false);
@@ -220,8 +227,8 @@ function App() {
           </button>
 
           {!publicKey ? (
-            <Button onClick={connectWallet} variant="success">
-              Connect Freighter
+            <Button onClick={connectWallet} variant="success" loading={isConnecting}>
+              {isConnecting ? 'Connecting…' : 'Connect Freighter'}
             </Button>
           ) : (
             <div className={styles.walletInfo}>
@@ -236,18 +243,28 @@ function App() {
         </div>
       </header>
 
-      {error && (
+      {/* Wallet errors (connection issues) */}
+      {walletError && (
         <Alert variant="error">
-          {error}
+          {walletError}
         </Alert>
       )}
 
+      {/* Transaction errors */}
+      {txError && (
+        <Alert variant="error">
+          {txError}
+        </Alert>
+      )}
+
+      {/* Transaction success */}
       {txResult && (
         <Alert variant="success">
           {txResult}
         </Alert>
       )}
 
+      {/* Contract not configured */}
       {CONTRACT_ID === 'C...' && (
         <Alert variant="warning">
           Set VITE_CONTRACT_ID in frontend/.env to connect to a deployed contract.
