@@ -63,6 +63,20 @@
 }
 
 /* Asset details styles */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.sectionTitle {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin: 0;
+}
+
 .assetImageWrapper {
   position: relative;
   overflow: hidden;

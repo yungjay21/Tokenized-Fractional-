@@ -1,0 +1,49 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--spacing-lg);
+}
+
+/* ── Skeleton placeholder styles ─────────────────────────────────────── */
+.skeletonImage {
+  height: 180px;
+  width: 100%;
+}
+
+.skeletonBody {
+  padding: var(--spacing-md);
+}
+
+/* ── State containers (error / empty) ────────────────────────────────── */
+.stateContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-2xl) var(--spacing-lg);
+  background-color: var(--bg-surface);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  text-align: center;
+  min-height: 300px;
+}
+
+.stateIcon {
+  color: var(--text-muted);
+  margin-bottom: var(--spacing-md);
+}
+
+.stateText {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  margin: 0 0 var(--spacing-xs);
+}
+
+.stateSubtext {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 320px;
+  line-height: 1.5;
+}

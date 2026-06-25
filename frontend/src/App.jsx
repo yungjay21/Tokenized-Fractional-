@@ -9,6 +9,7 @@ import Badge from './components/Badge/Badge';
 import Alert from './components/Alert/Alert';
 import Skeleton from './components/Skeleton/Skeleton';
 import Spinner from './components/Spinner/Spinner';
+import AssetGrid from './components/AssetGrid/AssetGrid';
 import styles from './App.module.css';
 
 import { useWalletStore } from './store/useWalletStore';
@@ -36,7 +37,16 @@ function App() {
     clearWalletError,
   } = useWalletStore();
 
-  const { assetMeta, fetchMetadata, clearMeta } = useAssetStore();
+  const {
+    assetMeta,
+    assets,
+    isFetchingAssets,
+    assetsError,
+    fetchMetadata,
+    fetchAllAssets,
+    clearMeta,
+    clearAssets,
+  } = useAssetStore();
 
   // ── Local UI state (not global — scoped to this component) ────────────────
   const [buyAmount, setBuyAmount] = useState(1);
@@ -79,6 +89,12 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publicKey]);
 
+  // ── Fetch all assets on mount ──────────────────────────────────────────────
+  useEffect(() => {
+    fetchAllAssets(API_URL);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Wallet actions ─────────────────────────────────────────────────────────
   const connectWallet = async () => {
     clearWalletError();
@@ -89,6 +105,7 @@ function App() {
   const disconnectWallet = () => {
     disconnect();
     clearMeta();
+    clearAssets();
     setTxResult(null);
     setTxError(null);
   };
@@ -303,6 +320,17 @@ function App() {
           )}
         </Card>
       ) : null}
+
+      {/* ── Asset Listing Grid ─────────────────────────────────────────── */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Available Assets</h2>
+        <AssetGrid
+          assets={assets}
+          loading={isFetchingAssets}
+          error={assetsError}
+          isEmpty={!isFetchingAssets && !assetsError && assets.length === 0}
+        />
+      </section>
 
       {/* ── Holdings + Buy Card ─────────────────────────────────────────── */}
       {publicKey && (

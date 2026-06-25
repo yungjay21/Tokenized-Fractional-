@@ -8,10 +8,15 @@ import { create } from 'zustand';
  * when a wallet connects, ensuring it stays fresh.
  */
 export const useAssetStore = create((set, get) => ({
-  // ── State ──────────────────────────────────────────────
+  // ── Single asset state ─────────────────────────────────
   assetMeta: null,
   isFetchingMeta: false,
   metaError: null,
+
+  // ── All assets listing state ────────────────────────────
+  assets: [],
+  isFetchingAssets: false,
+  assetsError: null,
 
   // ── Actions ────────────────────────────────────────────
 
@@ -47,9 +52,39 @@ export const useAssetStore = create((set, get) => ({
     }
   },
 
+  /**
+   * Fetches ALL RWA assets from GET /api/rwa.
+   *
+   * @param {string} apiUrl - Base URL of the metadata API
+   */
+  fetchAllAssets: async (apiUrl) => {
+    // Avoid duplicate concurrent fetches
+    if (get().isFetchingAssets) return;
+
+    set({ isFetchingAssets: true, assetsError: null });
+    try {
+      const res = await fetch(`${apiUrl}/api/rwa`);
+      if (res.ok) {
+        const json = await res.json();
+        set({ assets: json.data || [] });
+      } else {
+        console.warn('[AssetStore] Assets endpoint returned', res.status);
+        set({ assetsError: `Unable to load assets (${res.status})` });
+      }
+    } catch (err) {
+      console.warn('[AssetStore] Assets server unreachable:', err.message);
+      set({ assetsError: 'Unable to reach the metadata server. Please try again.' });
+    } finally {
+      set({ isFetchingAssets: false });
+    }
+  },
+
   /** Clears asset metadata (e.g. on wallet disconnect). */
   clearMeta: () => set({ assetMeta: null, metaError: null }),
 
   /** Clear metadata error. */
   clearMetaError: () => set({ metaError: null }),
+
+  /** Clear assets listing and error. */
+  clearAssets: () => set({ assets: [], assetsError: null }),
 }));
