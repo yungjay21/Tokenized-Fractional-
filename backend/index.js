@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import pino from 'pino';
 import pinoHttp from 'pino-http';
+import * as Sentry from '@sentry/node';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -22,6 +23,25 @@ export const logger = pino({
   level: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'test' ? 'silent' : 'info'),
   ...(isDev && { transport: { target: 'pino-pretty', options: { colorize: true, ignore: 'pid,hostname' } } }),
 });
+
+// ── Sentry ────────────────────────────────────────────────────────────────────
+if (process.env.SENTRY_DSN && process.env.NODE_ENV !== 'test') {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: process.env.SENTRY_TRACES_SAMPLE_RATE
+      ? parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE)
+      : 0.1,
+    profilesSampleRate: process.env.SENTRY_PROFILES_SAMPLE_RATE
+      ? parseFloat(process.env.SENTRY_PROFILES_SAMPLE_RATE)
+      : 0.1,
+    integrations: [
+      Sentry.httpIntegration({ breadcrumbs: true }),
+      Sentry.expressIntegration(),
+    ],
+  });
+  logger.info({ dsnPrefix: process.env.SENTRY_DSN.slice(0, 30) }, 'Sentry initialized');
+}
 
 // ── Data helpers ──────────────────────────────────────────────────────────────
 function getDataFile() {
@@ -54,6 +74,10 @@ export function validateRwaBody(body) {
   return null;
 }
 
+function cacheKey(contractId) {
+  return `rwa:${contractId}`;
+}
+
 function adminAuth(req, res, next) {
   const apiKey = req.headers['x-api-key'];
   const expected = process.env.ADMIN_API_KEY || 'dev-key-change-in-production';
@@ -67,6 +91,12 @@ function adminAuth(req, res, next) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 const app = express();
+
+// Sentry request handler must be the first middleware
+if (process.env.SENTRY_DSN) {
+  app.use(Sentry.Handlers.requestHandler());
+  app.use(Sentry.Handlers.tracingHandler());
+}
 
 app.use(helmet());
 app.use(cors({ origin: CORS_ORIGINS, methods: ['GET', 'POST', 'DELETE'], allowedHeaders: ['Content-Type', 'x-api-key'] }));
@@ -96,8 +126,38 @@ const writeLimiter = rateLimit({
 });
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+
+// Admin API key verification endpoint
+app.get('/api/admin/verify', adminAuth, (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.get('/health', async (_req, res) => {
+  const deps = {
+    storage: { status: 'ok' },
+    redis: { status: 'not_configured' },
+  };
+
+  // Check Redis if configured
+  if (process.env.REDIS_URL) {
+    try {
+      const Redis = (await import('ioredis')).default;
+      const pingClient = new Redis(process.env.REDIS_URL, {
+        lazyConnect: true,
+        connectTimeout: 2000,
+        maxRetriesPerRequest: 0,
+      });
+      await pingClient.connect();
+      await pingClient.ping();
+      pingClient.disconnect();
+      deps.redis = { status: 'ok' };
+    } catch {
+      deps.redis = { status: 'error', message: 'Redis configured but unreachable' };
+      return res.status(503).json({ status: 'degraded', timestamp: new Date().toISOString(), dependencies: deps });
+    }
+  }
+
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), dependencies: deps });
 });
 
 // GET /api/rwa?page=1&limit=20&assetType=real_estate&search=coffee
@@ -133,6 +193,9 @@ app.get('/api/rwa', (req, res) => {
     data: assets,
     pagination: { total, page: pageNum, limit: pageSize, totalPages },
   });
+
+  // Cache the full asset list (fire-and-forget)
+  cacheSet('rwa:all', { data: assets, pagination: { total, page: pageNum, limit: pageSize, totalPages } }).catch(() => {});
 });
 
 app.get('/api/rwa/:contractId', async (req, res) => {
@@ -144,7 +207,11 @@ app.get('/api/rwa/:contractId', async (req, res) => {
   const data = loadData();
   const asset = data[contractId];
   if (!asset) return res.status(404).json({ error: 'Asset metadata not found' });
-  res.json({ contractId, ...asset });
+
+  const result = { contractId, ...asset };
+  // Cache individual asset (fire-and-forget)
+  cacheSet(cacheKey(contractId), result).catch(() => {});
+  res.json(result);
 });
 
 app.post('/api/rwa', adminAuth, writeLimiter, async (req, res) => {
@@ -172,6 +239,9 @@ app.post('/api/rwa', adminAuth, writeLimiter, async (req, res) => {
   };
   saveData(data);
 
+  // Invalidate caches (fire-and-forget)
+  cacheDel('rwa:all').catch(() => {});
+
   req.log?.info({ contractId }, 'Asset created/updated');
   res.status(201).json({ contractId, ...data[contractId] });
 });
@@ -184,6 +254,9 @@ app.delete('/api/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => 
   delete data[contractId];
   saveData(data);
 
+  // Invalidate caches (fire-and-forget)
+  cacheDel('rwa:all', cacheKey(contractId)).catch(() => {});
+
   req.log?.info({ contractId }, 'Asset deleted');
   res.json({ message: 'Asset metadata deleted', contractId });
 });
@@ -191,6 +264,11 @@ app.delete('/api/rwa/:contractId', adminAuth, writeLimiter, async (req, res) => 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
+
+// Sentry error handler must be registered before other error handlers
+if (process.env.SENTRY_DSN) {
+  app.use(Sentry.Handlers.errorHandler());
+}
 
 app.use((err, req, res, _next) => {
   req.log?.error({ err }, 'Unhandled error');
