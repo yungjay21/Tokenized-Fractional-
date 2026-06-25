@@ -66,6 +66,32 @@ pub struct EventSetTotalShares {
     new_total: u32,
 }
 
+// ── OVERFLOW-SAFE MATH HELPERS ──────────────────────────────────────
+/// Safely add two i128 values, panicking on overflow
+fn checked_add_i128(a: i128, b: i128) -> i128 {
+    a.checked_add(b).unwrap_or_else(|| panic!("Arithmetic overflow: cannot add {} + {}", a, b))
+}
+
+/// Safely subtract two i128 values, panicking on underflow
+fn checked_sub_i128(a: i128, b: i128) -> i128 {
+    a.checked_sub(b).unwrap_or_else(|| panic!("Arithmetic underflow: cannot subtract {} from {}", b, a))
+}
+
+/// Safely multiply two i128 values, panicking on overflow
+fn checked_mul_i128(a: i128, b: i128) -> i128 {
+    a.checked_mul(b).unwrap_or_else(|| panic!("Arithmetic overflow: cannot multiply {} * {}", a, b))
+}
+
+/// Safely add two u32 values, panicking on overflow
+fn checked_add_u32(a: u32, b: u32) -> u32 {
+    a.checked_add(b).unwrap_or_else(|| panic!("Arithmetic overflow: cannot add {} + {}", a, b))
+}
+
+/// Safely subtract two u32 values, panicking on underflow
+fn checked_sub_u32(a: u32, b: u32) -> u32 {
+    a.checked_sub(b).unwrap_or_else(|| panic!("Arithmetic underflow: cannot subtract {} from {}", b, a))
+}
+
 #[contractimpl]
 impl RwaMarketplace {
     pub fn init(env: Env, admin: Address, payment_token: Address, price: i128, total_shares: u32) {
@@ -125,9 +151,10 @@ impl RwaMarketplace {
         let client = token::TokenClient::new(&env, &token_id);
         client.transfer(&buyer, &admin, &total_cost);
 
+        let new_available = checked_sub_u32(available, shares);
         env.storage()
             .instance()
-            .set(&DataKey::AvailableShares, &(available - shares));
+            .set(&DataKey::AvailableShares, &new_available);
 
         let prev_balance: u32 = env
             .storage()
@@ -135,7 +162,7 @@ impl RwaMarketplace {
             .get(&DataKey::Balance(buyer.clone()))
             .unwrap_or(0);
 
-        let new_balance = prev_balance + shares;
+        let new_balance = checked_add_u32(prev_balance, shares);
         env.storage()
             .persistent()
             .set(&DataKey::Balance(buyer.clone()), &new_balance);
@@ -210,9 +237,9 @@ impl RwaMarketplace {
             active_holders.push_back(holder.clone());
 
             // Pro-rata: holder_amount = total_amount * holder_shares / total_shares
-            // Use i128 arithmetic to avoid overflow
+            // Use checked arithmetic to avoid overflow
             let holder_amount: i128 =
-                (total_amount * (holder_shares as i128)) / (total_shares as i128);
+                checked_mul_i128(total_amount, holder_shares as i128) / (total_shares as i128);
 
             if holder_amount > 0 {
                 client.transfer(&contract_addr, &holder, &holder_amount);
@@ -347,7 +374,7 @@ impl RwaMarketplace {
             .get(&DataKey::AvailableShares)
             .expect("Contract not initialized: available shares");
 
-        let issued_shares = total_shares - available_shares;
+        let issued_shares = checked_sub_u32(total_shares, available_shares);
 
         if new_total < available_shares {
             panic!("New total must be at least available shares");
@@ -357,7 +384,7 @@ impl RwaMarketplace {
             panic!("New total cannot be less than issued shares");
         }
 
-        let new_available = new_total - issued_shares;
+        let new_available = checked_sub_u32(new_total, issued_shares);
 
         env.storage()
             .instance()
@@ -735,14 +762,80 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "New total cannot be less than issued shares")]
-    fn test_set_total_shares_below_issued() {
+    #[should_panic(expected = "Arithmetic overflow")]
+    fn test_buy_shares_price_overflow() {
+        let te = setup();
+        let c = client(&te);
+        // Use very high price that will overflow when multiplied by shares
+        c.init(&te.admin, &te.token_id, &i128::MAX, &1000);
+        mint(&te, &te.buyer, i128::MAX);
+        
+        // This should panic because price * shares overflows
+        c.buy_shares(&te.buyer, &2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Not enough shares available")]
+    fn test_buy_shares_overbuy() {
         let te = setup();
         let c = client(&te);
         c.init(&te.admin, &te.token_id, &100, &1000);
         mint(&te, &te.buyer, 100_000);
+        
+        // Buy more shares than available (caught by logic check, not arithmetic)
+        c.buy_shares(&te.buyer, &2000);
+    }
 
+    #[test]
+    #[should_panic(expected = "Arithmetic overflow")]
+    fn test_buy_shares_balance_overflow() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &1, &u32::MAX);
+        mint(&te, &te.buyer, i128::MAX);
+        
+        // Manually set high balance to test the checked_add_u32 in balance calculation
+        te.env.as_contract(&te.contract_id, || {
+            te.env.storage().persistent().set(&DataKey::Balance(te.buyer.clone()), &(u32::MAX - 10));
+            // Also set available shares high enough
+            te.env.storage().instance().set(&DataKey::AvailableShares, &1000u32);
+        });
+        
+        // Now buying 20 more shares should trigger overflow in checked_add_u32
+        c.buy_shares(&te.buyer, &20);
+    }
+
+    #[test]
+    #[should_panic(expected = "Arithmetic overflow")]
+    fn test_distribute_dividends_multiply_overflow() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        
+        c.buy_shares(&te.buyer, &500);
+        
+        // Use extremely large dividend amount that will overflow when multiplied by holder_shares
+        let huge_dividend: i128 = i128::MAX / 2;
+        mint(&te, &te.contract_id, huge_dividend);
+        
+        // This should panic because total_amount * holder_shares overflows
+        c.distribute_dividends(&te.token_id, &huge_dividend);
+    }
+
+    #[test]
+    #[should_panic(expected = "New total cannot be less than issued shares")]
+    fn test_set_total_shares_below_issued_logic_check() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        
+        // Buy some shares to create issued_shares
         c.buy_shares(&te.buyer, &600);
+        
+        // Try to set new_total to less than issued_shares
+        // This is caught by the logic check before any arithmetic
         c.set_total_shares(&500);
     }
 
