@@ -599,7 +599,7 @@ impl RwaMarketplace {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::{Address as _, Ledger as _}, token, Env};
+    use soroban_sdk::{testutils::{Address as _, Ledger as _}, token, Env, IntoVal};
 
     struct TestEnv {
         env: Env,
@@ -1096,6 +1096,228 @@ mod test {
     fn test_pre_init_emergency_withdraw() {
         let (_, client, _, admin) = pre_init_client();
         client.emergency_withdraw(&admin, &0);
+    }
+
+    // ── Edge case: complete sellout ─────────────────────────────────────
+
+    #[test]
+    fn test_buy_all_available_shares_sellout() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &50);
+        mint(&te, &te.buyer, 100_000);
+
+        c.buy_shares(&te.buyer, &50);
+        assert_eq!(c.get_available_shares(), 0);
+        assert_eq!(c.get_shares(&te.buyer), 50);
+    }
+
+    #[test]
+    #[should_panic(expected = "Not enough shares available")]
+    fn test_buy_after_sellout_panics() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &10);
+        mint(&te, &te.buyer, 100_000);
+
+        c.buy_shares(&te.buyer, &10); // sellout
+        c.buy_shares(&te.buyer, &1); // must panic
+    }
+
+    #[test]
+    fn test_buy_exact_remaining_shares_after_partial_sale() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &20);
+        mint(&te, &te.buyer, 100_000);
+
+        c.buy_shares(&te.buyer, &15);
+        assert_eq!(c.get_available_shares(), 5);
+
+        c.buy_shares(&te.buyer, &5); // buy exact remainder
+        assert_eq!(c.get_available_shares(), 0);
+        assert_eq!(c.get_shares(&te.buyer), 20);
+    }
+
+    // ── Edge case: emergency_withdraw with non-zero balance ─────────────
+
+    #[test]
+    fn test_emergency_withdraw_non_zero_balance() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 10_000);
+
+        c.buy_shares(&te.buyer, &10); // 10 * 100 = 1000 tokens sent to admin
+
+        // Mint some tokens directly to contract to simulate accumulated balance
+        mint(&te, &te.contract_id, 5_000);
+
+        let token_client = token::TokenClient::new(&te.env, &te.token_id);
+        let before = token_client.balance(&te.admin);
+
+        c.emergency_withdraw(&te.admin, &5_000);
+
+        assert_eq!(token_client.balance(&te.admin), before + 5_000);
+        assert_eq!(token_client.balance(&te.contract_id), 0);
+    }
+
+    // ── Edge case: multiple sequential pause/unpause cycles ────────────
+
+    #[test]
+    fn test_multiple_sequential_pause_unpause_cycles() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
+        for _ in 0..5 {
+            c.pause();
+            assert!(c.is_paused());
+            c.unpause();
+            assert!(!c.is_paused());
+        }
+    }
+
+    #[test]
+    fn test_pause_pause_is_idempotent() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+
+        c.pause();
+        c.pause(); // pausing again should not panic
+        assert!(c.is_paused());
+    }
+
+    // ── Edge case: non-admin calling admin operations ───────────────────
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_pause() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        te.env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &te.buyer,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &te.contract_id,
+                fn_name: "pause",
+                args: ().into_val(&te.env),
+                sub_invokes: &[],
+            },
+        }]);
+        c.pause();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_unpause() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        c.pause();
+        te.env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &te.buyer,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &te.contract_id,
+                fn_name: "unpause",
+                args: ().into_val(&te.env),
+                sub_invokes: &[],
+            },
+        }]);
+        c.unpause();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_set_price() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        te.env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &te.buyer,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &te.contract_id,
+                fn_name: "set_price",
+                args: (200i128,).into_val(&te.env),
+                sub_invokes: &[],
+            },
+        }]);
+        c.set_price(&200);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_set_total_shares() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        te.env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &te.buyer,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &te.contract_id,
+                fn_name: "set_total_shares",
+                args: (2000u32,).into_val(&te.env),
+                sub_invokes: &[],
+            },
+        }]);
+        c.set_total_shares(&2000);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_emergency_withdraw() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.contract_id, 1_000);
+        te.env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &te.buyer,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &te.contract_id,
+                fn_name: "emergency_withdraw",
+                args: (&te.buyer, 1_000i128).into_val(&te.env),
+                sub_invokes: &[],
+            },
+        }]);
+        c.emergency_withdraw(&te.buyer, &1_000);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_distribute_dividends() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+        c.buy_shares(&te.buyer, &10);
+        mint(&te, &te.contract_id, 1_000);
+        te.env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &te.buyer,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &te.contract_id,
+                fn_name: "distribute_dividends",
+                args: (&te.token_id, 1_000i128).into_val(&te.env),
+                sub_invokes: &[],
+            },
+        }]);
+        c.distribute_dividends(&te.token_id, &1_000);
+    }
+
+    // ── Edge case: set_total_shares decreasing to exactly issued ────────
+
+    #[test]
+    fn test_set_total_shares_decrease_to_exactly_issued() {
+        let te = setup();
+        let c = client(&te);
+        c.init(&te.admin, &te.token_id, &100, &1000);
+        mint(&te, &te.buyer, 100_000);
+
+        c.buy_shares(&te.buyer, &400); // 400 issued, 600 available
+        c.set_total_shares(&400); // shrink to exactly issued
+        assert_eq!(c.get_total_shares(), 400);
+        assert_eq!(c.get_available_shares(), 0);
+        assert_eq!(c.get_shares(&te.buyer), 400);
     }
 }
 // --- TIMELOCK MODULE ---
