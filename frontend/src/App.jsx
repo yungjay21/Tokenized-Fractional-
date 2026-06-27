@@ -10,6 +10,7 @@ import Skeleton from './components/Skeleton/Skeleton';
 import Spinner from './components/Spinner/Spinner';
 import AssetGrid from './components/AssetGrid/AssetGrid';
 import AdminPage from './components/AdminPage/AdminPage';
+import Navbar from './components/Navbar/Navbar';
 import styles from './App.module.css';
 
 import { useWalletStore } from './store/useWalletStore';
@@ -214,21 +215,7 @@ function App() {
         </div>
       </header>
 
-      {/* Tab Navigation */}
-      <nav className={styles.tabs}>
-        <button
-          className={`${styles.tab} ${view === 'marketplace' ? styles.tabActive : ''}`}
-          onClick={() => setView('marketplace')}
-        >
-          Marketplace
-        </button>
-        <button
-          className={`${styles.tab} ${view === 'admin' ? styles.tabActive : ''}`}
-          onClick={() => setView('admin')}
-        >
-          Admin
-        </button>
-      </nav>
+      <Navbar activeView={view} onNavigate={setView} />
 
       {view === 'admin' ? (
         <AdminPage
