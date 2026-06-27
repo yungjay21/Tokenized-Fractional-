@@ -23,6 +23,10 @@ A full-stack decentralized application (dApp) built on the **Stellar Network** u
 └── README.md
 ```
 
+## Documentation
+
+- [Architecture Overview & Diagrams](docs/architecture.md)
+
 ## Prerequisites
 
 - Node.js (v18 or higher)
