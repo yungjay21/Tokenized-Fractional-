@@ -21,11 +21,8 @@ import { useToastStore } from './store/useToastStore';
 import useTransactionStatus from './hooks/useTransactionStatus';
 
 const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID || 'C...';
-const RPC_URL = import.meta.env.VITE_RPC_URL || 'https://soroban-testnet.stellar.org:443';
 const NETWORK_PASSPHRASE = import.meta.env.VITE_NETWORK_PASSPHRASE || Networks.TESTNET;
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-
-const server = new rpc.Server(RPC_URL);
 
 function App() {
   // ── Global store state ─────────────────────────────────────────────────────
@@ -55,8 +52,6 @@ function App() {
   const [buyAmount, setBuyAmount] = useState(1);
 
   // Granular loading states
-  const [loadingBuy, setLoadingBuy] = useState(false);
-  const [loadingShares, setLoadingShares] = useState(false);
   const [loadingMeta, setLoadingMeta] = useState(false);
 
   const [error, setError] = useState(null);
@@ -117,10 +112,40 @@ function App() {
     checkConnection();
   }, [checkConnection]);
 
+  // Construct arguments dynamically
+  const fetchSharesArgs = useMemo(() => {
+    if (!publicKey) return [];
+    try {
+      return [nativeToScVal(publicKey, { type: 'address' })];
+    } catch (e) {
+      console.error('Failed to construct address ScVal:', e);
+      return [];
+    }
+  }, [publicKey]);
+
+  // Hook for get_shares
+  const {
+    loading: loadingShares,
+    refetch: fetchShares,
+  } = useSorobanRead('get_shares', fetchSharesArgs, {
+    skip: !publicKey || CONTRACT_ID.length < 50,
+    onSuccess: (result) => {
+      if (result && result.retval) {
+        setShares(Number(result.retval.u32()));
+      }
+    },
+    onError: (err) => {
+      console.error('Error fetching shares:', err);
+      setError('Failed to fetch share balance.');
+    },
+  });
+
+  const buySharesTx = useSorobanWrite('buy_shares');
+  const loadingBuy = buySharesTx.loading;
+
   // ── Fetch chain data whenever wallet connects ──────────────────────────────
   useEffect(() => {
     if (publicKey) {
-      fetchShares();
       fetchMetadata(CONTRACT_ID, API_URL);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -147,36 +172,6 @@ function App() {
     setTxError(null);
   };
 
-  const fetchShares = async () => {
-    if (!publicKey || CONTRACT_ID.length < 50) return;
-    setLoadingShares(true);
-    try {
-      setWalletError(null);
-      const contract = new Contract(CONTRACT_ID);
-      const scValAddress = nativeToScVal(publicKey, { type: 'address' });
-
-      const account = await server.getAccount(publicKey);
-      const tx = new TransactionBuilder(account, {
-        fee: '100',
-        networkPassphrase: NETWORK_PASSPHRASE,
-      })
-        .addOperation(contract.call('get_shares', scValAddress))
-        .setTimeout(30)
-        .build();
-
-      const simulation = await server.simulateTransaction(tx);
-      if (simulation.result) {
-        const parsedShares = Number(simulation.result.retval.u32());
-        setShares(parsedShares);
-      }
-    } catch (err) {
-      console.error('Error fetching shares:', err);
-      setError('Failed to fetch share balance.');
-    } finally {
-      setLoadingShares(false);
-    }
-  };
-
   // ── Transactions ───────────────────────────────────────────────────────────
   const handleBuyShares = async () => {
     if (!publicKey) return;
@@ -185,42 +180,15 @@ function App() {
       return;
     }
 
-    setLoadingBuy(true);
     setError(null);
     setTxResult(null);
     setLastTxHash(null);
 
     try {
-      const account = await server.getAccount(publicKey);
-      const contract = new Contract(CONTRACT_ID);
-
       const scValBuyer = nativeToScVal(publicKey, { type: 'address' });
       const scValShares = nativeToScVal(buyAmount, { type: 'u32' });
 
-      let tx = new TransactionBuilder(account, {
-        fee: '10000',
-        networkPassphrase: NETWORK_PASSPHRASE,
-      })
-        .addOperation(contract.call('buy_shares', scValBuyer, scValShares))
-        .setTimeout(30)
-        .build();
-
-      const simulation = await server.simulateTransaction(tx);
-      if (simulation.error) {
-        throw new Error(simulation.error);
-      }
-
-      tx = rpc.assembleTransaction(tx, simulation).build();
-      const { signedTxXdr, error: signError } = await signTransaction(tx.toXDR(), {
-        networkPassphrase: NETWORK_PASSPHRASE,
-      });
-      if (signError || !signedTxXdr) {
-        throw new Error(signError?.message || 'Freighter transaction signing failed');
-      }
-
-      const submitRes = await server.sendTransaction(
-        TransactionBuilder.fromXDR(signedTxXdr, NETWORK_PASSPHRASE)
-      );
+      const submitRes = await buySharesTx.execute([scValBuyer, scValShares]);
 
       const hash = submitRes.hash;
       setLastTxHash(hash);

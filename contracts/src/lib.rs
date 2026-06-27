@@ -196,6 +196,16 @@ impl RwaMarketplace {
             panic!("Marketplace is paused");
         }
 
+        // Check whitelist for KYC compliance
+        if !env
+            .storage()
+            .persistent()
+            .get(&DataKey::Whitelisted(buyer.clone()))
+            .unwrap_or(false)
+        {
+            panic!("Buyer is not whitelisted");
+        }
+
         let available: u32 = env
             .storage()
             .instance()
@@ -486,7 +496,7 @@ impl RwaMarketplace {
         claimer.require_auth();
 
         let now = env.ledger().timestamp();
-        let mut schedules = Self::load_vesting_schedules(&env, &claimer);
+        let schedules = Self::load_vesting_schedules(&env, &claimer);
 
         let mut total_claimable: u32 = 0;
         let mut updated_schedules: Vec<VestingSchedule> = Vec::new(&env);
@@ -1065,6 +1075,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &10);
         c.add_to_whitelist(&te.buyer);
         mint(&te, &te.buyer, 100000);
+        c.add_to_whitelist(&te.buyer);
         c.buy_shares(&te.buyer, &20);
     }
 
@@ -1334,6 +1345,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &i128::MAX, &1000);
         c.add_to_whitelist(&te.buyer);
         mint(&te, &te.buyer, i128::MAX);
+        c.add_to_whitelist(&te.buyer);
         
         // This should panic because price * shares overflows
         c.buy_shares(&te.buyer, &2);
@@ -1347,6 +1359,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         c.add_to_whitelist(&te.buyer);
         mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
         
         // Buy more shares than available (caught by logic check, not arithmetic)
         c.buy_shares(&te.buyer, &2000);
@@ -1360,6 +1373,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &1, &u32::MAX);
         c.add_to_whitelist(&te.buyer);
         mint(&te, &te.buyer, i128::MAX);
+        c.add_to_whitelist(&te.buyer);
         
         // Manually set high balance to test the checked_add_u32 in balance calculation
         te.env.as_contract(&te.contract_id, || {
@@ -1380,6 +1394,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         c.add_to_whitelist(&te.buyer);
         mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
         
         c.buy_shares(&te.buyer, &500);
         
@@ -1399,6 +1414,7 @@ mod test {
         c.init(&te.admin, &te.token_id, &100, &1000);
         c.add_to_whitelist(&te.buyer);
         mint(&te, &te.buyer, 100_000);
+        c.add_to_whitelist(&te.buyer);
         
         // Buy some shares to create issued_shares
         c.buy_shares(&te.buyer, &600);
@@ -1423,7 +1439,7 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Contract not initialized")]
+    #[should_panic(expected = "Buyer is not whitelisted")]
     fn test_pre_init_buy_shares() {
         let (env, client, _, _) = pre_init_client();
         let buyer = Address::generate(&env);
