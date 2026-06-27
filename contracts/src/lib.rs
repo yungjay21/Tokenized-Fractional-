@@ -262,13 +262,15 @@ impl RwaMarketplace {
     }
 
     pub fn add_to_whitelist(env: Env, addr: Address) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Whitelisted(addr.clone()), &true);
     }
 
     pub fn remove_from_whitelist(env: Env, addr: Address) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
         admin.require_auth();
         env.storage().persistent().remove(&DataKey::Whitelisted(addr.clone()));
     }
@@ -451,21 +453,23 @@ impl RwaMarketplace {
             .storage()
             .instance()
             .get(&DataKey::AvailableShares)
-            .unwrap();
+            .expect("Contract not initialized: available shares");
 
         if shares > available {
             panic!("Not enough shares available for purchase");
         }
 
-        let price: i128 = env.storage().instance().get(&DataKey::PricePerShare).unwrap();
+        let price: i128 = env.storage().instance().get(&DataKey::PricePerShare)
+            .expect("Contract not initialized: price");
         let total_cost = price * (shares as i128);
 
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+            .expect("Contract not initialized: admin");
         let token_id: Address = env
             .storage()
             .instance()
             .get(&DataKey::PaymentToken)
-            .unwrap();
+            .expect("Contract not initialized: payment token");
 
         let client = token::TokenClient::new(&env, &token_id);
         client.transfer(&buyer, &admin, &total_cost);
@@ -1486,6 +1490,30 @@ mod test {
     fn test_pre_init_emergency_withdraw() {
         let (_, client, _, admin) = pre_init_client();
         client.emergency_withdraw(&admin, &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Contract not initialized")]
+    fn test_pre_init_add_to_whitelist() {
+        let (env, client, _, _) = pre_init_client();
+        let addr = Address::generate(&env);
+        client.add_to_whitelist(&addr);
+    }
+
+    #[test]
+    #[should_panic(expected = "Contract not initialized")]
+    fn test_pre_init_remove_from_whitelist() {
+        let (env, client, _, _) = pre_init_client();
+        let addr = Address::generate(&env);
+        client.remove_from_whitelist(&addr);
+    }
+
+    #[test]
+    #[should_panic(expected = "Contract not initialized")]
+    fn test_pre_init_buy_vested_shares() {
+        let (env, client, _, _) = pre_init_client();
+        let buyer = Address::generate(&env);
+        client.buy_vested_shares(&buyer, &1, &3600);
     }
 
     // ── Metadata URI tests ──────────────────────────────────────────────
