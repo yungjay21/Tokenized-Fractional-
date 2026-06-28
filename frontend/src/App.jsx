@@ -14,6 +14,7 @@ import AdminPage from './components/AdminPage/AdminPage';
 import PortfolioPage from './components/PortfolioPage/PortfolioPage';
 import ToastContainer from './components/Toast/Toast';
 import ConfirmPurchase from './components/ConfirmPurchase/ConfirmPurchase';
+import TransactionHistory from './components/TransactionHistory/TransactionHistory';
 import styles from './App.module.css';
 
 import { useWalletStore } from './store/useWalletStore';
@@ -312,6 +313,12 @@ function App() {
         >
           Admin
         </button>
+        <button
+          className={`${styles.tab} ${view === 'history' ? styles.tabActive : ''}`}
+          onClick={() => setView('history')}
+        >
+          History
+        </button>
       </nav>
 
       <ToastContainer />
@@ -323,6 +330,8 @@ function App() {
           publicKey={publicKey}
           onDisconnect={() => setView('marketplace')}
         />
+      ) : view === 'history' ? (
+        <TransactionHistory />
       ) : (
         <>
       {/* Wallet errors (connection issues) */}
