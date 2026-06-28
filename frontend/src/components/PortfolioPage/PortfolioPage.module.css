@@ -43,6 +43,7 @@
 .summaryRow {
   display: flex;
   justify-content: space-around;
+  flex-wrap: wrap;
   gap: var(--spacing-md);
 }
 
@@ -110,6 +111,36 @@
   grid-template-columns: 1fr 100px 100px 120px 80px;
   gap: var(--spacing-md);
   align-items: center;
+}
+
+@media (max-width: 600px) {
+  .tableHeader {
+    display: none;
+  }
+
+  .row {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto auto;
+    gap: var(--spacing-sm);
+  }
+
+  /* Asset info spans full width */
+  .assetInfo {
+    grid-column: 1 / -1;
+  }
+
+  /* Numeric cells each take half width */
+  .colShares,
+  .colPrice,
+  .colValue {
+    text-align: left;
+  }
+
+  /* Action button full width */
+  .colAction {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
 }
 
 .assetInfo {
