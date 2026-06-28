@@ -7,6 +7,7 @@ import './i18n';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
 import ErrorFallback from './components/ErrorFallback/ErrorFallback';
+import { ThemeProvider } from './context/ThemeContext';
 
 // Global unhandled error handlers
 window.onerror = (message, source, lineno, colno, error) => {
