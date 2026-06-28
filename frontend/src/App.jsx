@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { Networks, nativeToScVal } from '@stellar/stellar-sdk';
+import { useTranslation } from 'react-i18next';
+import { useSorobanRead, useSorobanWrite } from './hooks/useSoroban';
 
 import Button from './components/Button/Button';
 import Card from './components/Card/Card';
@@ -14,7 +16,7 @@ import AdminPage from './components/AdminPage/AdminPage';
 import PortfolioPage from './components/PortfolioPage/PortfolioPage';
 import ToastContainer from './components/Toast/Toast';
 import ConfirmPurchase from './components/ConfirmPurchase/ConfirmPurchase';
-import Navbar from './components/Navbar/Navbar';
+import LanguageSwitcher from './components/LanguageSwitcher/LanguageSwitcher';
 import styles from './App.module.css';
 
 import { useWalletStore } from './store/useWalletStore';
@@ -120,15 +122,8 @@ function MarketplacePage({ publicKey, walletError, assetMeta, assets, isFetching
 }
 
 function App() {
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  const activeView = PATH_TO_VIEW[location.pathname] || 'marketplace';
-
-  const handleNavigate = (viewId) => {
-    navigate(VIEW_TO_PATH[viewId] || '/');
-  };
-
+  // ── Global store state ─────────────────────────────────────────────────────
+  const { t } = useTranslation();
   const {
     publicKey, isConnecting, walletError, shares,
     connect, disconnect, checkConnection, setShares, clearWalletError,
@@ -246,7 +241,13 @@ function App() {
           </div>
         </div>
         <div className={styles.walletArea}>
-          <button onClick={toggleTheme} className={styles.themeToggle} title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'} aria-label="Toggle theme">
+          <LanguageSwitcher />
+          <button
+            onClick={toggleTheme}
+            className={styles.themeToggle}
+            title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+            aria-label="Toggle theme"
+          >
             {theme === 'dark' ? (
               <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
             ) : (
@@ -254,39 +255,161 @@ function App() {
             )}
           </button>
           {!publicKey ? (
-            <Button onClick={connectWallet} variant="success" loading={isConnecting}>{isConnecting ? 'Connecting…' : 'Connect Freighter'}</Button>
+            <Button onClick={connectWallet} variant="success" loading={isConnecting}>
+              {isConnecting ? t('wallet.connecting') : t('wallet.connect')}
+            </Button>
           ) : (
             <div className={styles.walletInfo}>
-              <span className={styles.publicKey} title={publicKey}>{publicKey}</span>
-              <Button onClick={disconnectWallet} variant="danger">Disconnect</Button>
+              <span className={styles.publicKey} title={publicKey}>
+                {publicKey}
+              </span>
+              <Button onClick={disconnectWallet} variant="danger">
+                {t('wallet.disconnect')}
+              </Button>
             </div>
           )}
         </div>
       </header>
 
-      <Navbar activeView={activeView} onNavigate={handleNavigate} />
+      {/* Tab Navigation */}
+      <nav className={styles.tabs}>
+        <button
+          className={`${styles.tab} ${view === 'marketplace' ? styles.tabActive : ''}`}
+          onClick={() => setView('marketplace')}
+        >
+          {t('nav.marketplace')}
+        </button>
+        <button
+          className={`${styles.tab} ${view === 'portfolio' ? styles.tabActive : ''}`}
+          onClick={() => setView('portfolio')}
+        >
+          {t('nav.portfolio')}
+        </button>
+        <button
+          className={`${styles.tab} ${view === 'admin' ? styles.tabActive : ''}`}
+          onClick={() => setView('admin')}
+        >
+          {t('nav.admin')}
+        </button>
+        <button
+          className={`${styles.tab} ${view === 'history' ? styles.tabActive : ''}`}
+          onClick={() => setView('history')}
+        >
+          History
+        </button>
+      </nav>
 
       <ToastContainer />
 
-      <Routes>
-        <Route path="/" element={
-          <MarketplacePage
-            publicKey={publicKey} walletError={walletError} assetMeta={assetMeta}
-            assets={assets} isFetchingAssets={isFetchingAssets} assetsError={assetsError}
-            loadingMeta={loadingMeta} shares={shares} loadingShares={loadingShares}
-            buyAmount={buyAmount} setBuyAmount={setBuyAmount} loadingBuy={loadingBuy}
-            handleBuyShares={handleBuyShares} pricePerShare={pricePerShare}
-          />
-        } />
-        <Route path="/portfolio" element={<PortfolioPage />} />
-        <Route path="/admin" element={<AdminPage publicKey={publicKey} onDisconnect={() => navigate('/')} />} />
-        <Route path="/history" element={
-          <Card><p style={{ padding: 'var(--spacing-md)' }}>Transaction history coming soon.</p></Card>
-        } />
-        <Route path="*" element={
-          <Card><p style={{ padding: 'var(--spacing-md)' }}>Page not found. <a href="/">Go home</a></p></Card>
-        } />
-      </Routes>
+      {view === 'portfolio' ? (
+        <PortfolioPage />
+      ) : view === 'admin' ? (
+        <AdminPage
+          publicKey={publicKey}
+          onDisconnect={() => setView('marketplace')}
+        />
+      ) : view === 'history' ? (
+        <TransactionHistory />
+      ) : (
+        <>
+      {/* Wallet errors (connection issues) */}
+      {walletError && (
+        <Alert variant="error">
+          {walletError}
+        </Alert>
+      )}
+
+      {/* Contract not configured */}
+      {CONTRACT_ID === 'C...' && (
+        <Alert variant="warning">
+          {CONTRACT_NOT_CONFIGURED}
+        </Alert>
+      )}
+
+      {/* ── Asset Metadata Card ─────────────────────────────────────────── */}
+      {loadingMeta ? (
+        <Card>
+          <div className={styles.assetImageWrapper}>
+            <Skeleton variant="rect" height="100%" style={{ borderRadius: 'var(--radius-sm)' }} />
+          </div>
+          <Skeleton variant="text" height="1.4em" width="55%" style={{ marginBottom: 'var(--spacing-xs)' }} />
+          <Skeleton variant="text" height="1em" width="35%" style={{ marginBottom: 'var(--spacing-sm)' }} />
+          <Skeleton variant="text" lines={3} style={{ marginBottom: 'var(--spacing-md)' }} />
+          <Skeleton variant="text" height="1.1em" width="40%" />
+        </Card>
+      ) : assetMeta ? (
+        <Card hoverable>
+          {assetMeta.imageUrl && (
+            <div className={styles.assetImageWrapper}>
+              <img src={assetMeta.imageUrl} alt={assetMeta.title} className={styles.assetImage} />
+            </div>
+          )}
+          <h2 className={styles.assetTitle}>{assetMeta.title}</h2>
+          <p className={styles.assetLocation}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={styles.svgIcon}><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+            {assetMeta.location}
+          </p>
+          <p className={styles.assetDescription}>{assetMeta.description}</p>
+          {assetMeta.totalValuation && (
+            <div className={styles.assetValuation}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={styles.svgIcon}><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+              <span>Valuation: {assetMeta.totalValuation}</span>
+            </div>
+          )}
+        </Card>
+      ) : null}
+
+      {/* ── Asset Listing Grid ─────────────────────────────────────────── */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>{t('marketplace.availableAssets')}</h2>
+        <AssetGrid
+          assets={assets}
+          loading={isFetchingAssets}
+          error={assetsError}
+          isEmpty={!isFetchingAssets && !assetsError && assets.length === 0}
+        />
+      </section>
+
+      {/* ── Holdings + Buy Card ─────────────────────────────────────────── */}
+      {publicKey && (
+        <Card>
+          <div className={styles.holdingsRow}>
+            <span className={styles.holdingsLabel}>{t('marketplace.shareBalance')}</span>
+            {loadingShares ? (
+              <span className={styles.holdingsValueLoading}>
+                <Spinner size="sm" label="Fetching share balance…" />
+                <Skeleton variant="text" width="3rem" height="1.6em" />
+              </span>
+            ) : (
+              <span className={styles.holdingsValue}>{shares}</span>
+            )}
+          </div>
+          <hr className={styles.divider} />
+          <h3 className={styles.purchaseHeader}>{t('marketplace.buyShares')}</h3>
+          <div className={styles.purchaseRow}>
+            <Input
+              id="buy-amount-input"
+              type="number"
+              value={buyAmount}
+              onChange={(e) => setBuyAmount(Math.max(1, Number(e.target.value)))}
+              min="1"
+              disabled={loadingBuy}
+              className={styles.buyInput}
+            />
+            <Button onClick={handleBuyShares} loading={loadingBuy} variant="primary">
+              {loadingBuy ? t('marketplace.processing') : t('marketplace.buyButton')}
+            </Button>
+          </div>
+          {loadingBuy && (
+            <div className={styles.buyLoadingHint}>
+              <Spinner size="sm" label="Processing transaction…" />
+              <span>Submitting transaction to the network…</span>
+            </div>
+          )}
+        </Card>
+      )}
+        </>
+      )}
 
       {confirmPending && (
         <ConfirmPurchase shares={buyAmount} pricePerShare={pricePerShare} onConfirm={handleConfirmBuy} onCancel={() => setConfirmPending(false)} loading={loadingBuy} />
